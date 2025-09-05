@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gemini Real-time App</title>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; }
+        #container { max-width: 800px; width: 100%; }
+        #prompt-input { width: 70%; padding: 8px; }
+        #send-button { padding: 8px; }
+        #output { margin-top: 20px; border: 1px solid #ccc; padding: 10px; min-height: 100px; }
+        #images { margin-top: 20px; }
+        img { max-width: 100%; height: auto; }
+        .status { font-style: italic; color: #888; }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <h1>Gemini Real-time App</h1>
+        <p>
+            Interact with Gemini in real-time. Try prompts like "Tell me a story about a robot who learns to paint" for audio/text,
+            or "Generate an image of a futuristic city" to test the image tool.
+        </p>
+        <input type="text" id="prompt-input" placeholder="Enter your prompt...">
+        <button id="send-button">Send</button>
+
+        <h2>Response</h2>
+        <div id="output"></div>
+
+        <h2>Generated Images</h2>
+        <div id="images"></div>
+
+        <p class="status" id="status">Ready</p>
+    </div>
+
+    <script>
+        const promptInput = document.getElementById('prompt-input');
+        const sendButton = document.getElementById('send-button');
+        const outputDiv = document.getElementById('output');
+        const imagesDiv = document.getElementById('images');
+        const statusDiv = document.getElementById('status');
+
+        const ws = new WebSocket(`ws://${window.location.host}`);
+
+        let audioContext;
+        let audioQueue = [];
+        let isPlaying = false;
+
+        function initAudio() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+        }
+
+        ws.onopen = () => {
+            statusDiv.textContent = 'Connected to server.';
+        };
+
+        ws.onmessage = (event) => {
+            const message = JSON.parse(event.data);
+            switch (message.type) {
+                case 'text':
+                    outputDiv.textContent += message.data;
+                    break;
+                case 'audio':
+                    initAudio();
+                    const audioData = atob(message.data);
+                    const audioBytes = new Uint8Array(audioData.length);
+                    for (let i = 0; i < audioData.length; i++) {
+                        audioBytes[i] = audioData.charCodeAt(i);
+                    }
+                    audioQueue.push(audioBytes.buffer);
+                    if (!isPlaying) {
+                        playNextAudioChunk();
+                    }
+                    break;
+                case 'image':
+                    const img = document.createElement('img');
+                    img.src = message.data;
+                    imagesDiv.appendChild(img);
+                    break;
+                case 'status':
+                    if (message.data === 'done') {
+                        statusDiv.textContent = 'Interaction complete.';
+                        sendButton.disabled = false;
+                    }
+                    break;
+                case 'error':
+                    statusDiv.textContent = `Error: ${message.data}`;
+                    sendButton.disabled = false;
+                    break;
+            }
+        };
+
+        async function playNextAudioChunk() {
+            if (audioQueue.length === 0) {
+                isPlaying = false;
+                return;
+            }
+            isPlaying = true;
+            const buffer = audioQueue.shift();
+            try {
+                const audioBuffer = await audioContext.decodeAudioData(buffer);
+                const source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(audioContext.destination);
+                source.onended = playNextAudioChunk;
+                source.start();
+            } catch (error) {
+                console.error('Error playing audio:', error);
+                // If there's an error, try playing the next chunk
+                playNextAudioChunk();
+            }
+        }
+
+        ws.onclose = () => {
+            statusDiv.textContent = 'Disconnected from server.';
+            sendButton.disabled = true;
+        };
+
+        ws.onerror = (error) => {
+            console.error('WebSocket error:', error);
+            statusDiv.textContent = 'WebSocket error.';
+        };
+
+        sendButton.addEventListener('click', () => {
+            const prompt = promptInput.value;
+            if (prompt && ws.readyState === WebSocket.OPEN) {
+                outputDiv.textContent = '';
+                imagesDiv.innerHTML = '';
+                audioQueue = [];
+                ws.send(prompt);
+                statusDiv.textContent = 'Waiting for response...';
+                sendButton.disabled = true;
+            }
+        });
+    </script>
+</body>
+</html>
